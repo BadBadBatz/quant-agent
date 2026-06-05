@@ -5,7 +5,16 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "backtest": "node scripts/backtest.js",
+    "backtest:dry-run": "node scripts/backtest.js --dry-run",
+    "rule-adjustment": "node scripts/rule_adjustment.js",
+    "retrain:xgboost": "python scripts/retrain_xgboost.py",
+    "cron:pre-market-fetch": "node scripts/invoke-cron.js /api/cron/pre-market-fetch",
+    "cron:market-open": "node scripts/invoke-cron.js /api/cron/market-open",
+    "cron:position-monitor": "node scripts/invoke-cron.js /api/cron/position-monitor",
+    "cron:eod": "node scripts/invoke-cron.js /api/cron/eod",
+    "cron:outcome-writer": "node scripts/invoke-cron.js /api/cron/outcome-writer"
   },
   "dependencies": {
     "next": "14.2.35",
@@ -15,6 +24,7 @@
     "@anthropic-ai/sdk": "^0.52.0",
     "@supabase/supabase-js": "^2.49.0",
     "@supabase/ssr": "^0.6.1",
+    "dotenv": "^16.4.7",
     "recharts": "^2.15.3"
   },
   "devDependencies": {
