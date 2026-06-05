@@ -3,10 +3,11 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { verifyCronSecret } from '@/lib/safety';
 import { getAccount, getPositions, getBars } from '@/lib/alpaca';
-import { logPortfolioSnapshot, getLatestSnapshot, getFirstSnapshot } from '@/lib/supabase';
+import { logPortfolioSnapshot, getLatestSnapshot, getFirstSnapshot, getTrades, logDailySummary } from '@/lib/supabase';
+import { claudeDailySummary } from '@/lib/claude';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 async function getDailyPct(symbol) {
   try {
@@ -66,5 +67,34 @@ export async function GET(request) {
     qqq_daily_pct: qqqPct,
   });
 
-  return NextResponse.json(snapshot);
+  // Also run daily summary immediately after snapshot (saves a separate cron service)
+  let summaryRecord = null;
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const todayStart = new Date(today + 'T00:00:00Z').toISOString();
+    const allTrades = await getTrades({ limit: 100 });
+    const tradesToday = allTrades.filter(t => t.created_at >= todayStart);
+
+    const dailyPnlPct = parseFloat(Number(snapshot.daily_pnl_pct).toFixed(2));
+    const vsSpyQqq = {
+      spy: parseFloat((dailyPnlPct - spyPct).toFixed(2)),
+      qqq: parseFloat((dailyPnlPct - qqqPct).toFixed(2)),
+    };
+
+    const { summary, next_week_plan } = await claudeDailySummary(
+      { total_value: totalValue, daily_pnl_pct: dailyPnlPct },
+      tradesToday,
+      vsSpyQqq
+    );
+
+    summaryRecord = await logDailySummary({
+      date: today, summary, trades_today: tradesToday.length,
+      portfolio_value: totalValue, day_pnl_pct: dailyPnlPct,
+      vs_spy: vsSpyQqq.spy, vs_qqq: vsSpyQqq.qqq, next_week_plan,
+    });
+  } catch (err) {
+    console.error('[portfolio-snapshot] daily-summary error:', err.message);
+  }
+
+  return NextResponse.json({ snapshot, summary: summaryRecord });
 }
