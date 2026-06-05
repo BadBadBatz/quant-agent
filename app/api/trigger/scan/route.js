@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 
 // Session-protected trigger — middleware already enforces auth, so no

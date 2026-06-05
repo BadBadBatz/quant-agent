@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 import { checkSafetyGates, verifyCronSecret, isMarketHours } from '@/lib/safety';
 import { getPositions, getLatestQuote, sellPosition } from '@/lib/alpaca';

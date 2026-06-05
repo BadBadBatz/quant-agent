@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 import { getAccount, getPositions } from '@/lib/alpaca';
 import { getSnapshotHistory } from '@/lib/supabase';

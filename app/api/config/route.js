@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getConfigRows, updateConfig } from '@/lib/supabase';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const rows = await getConfigRows();

@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 import { verifyCronSecret } from '@/lib/safety';
 import { getAccount, getPositions, getBars } from '@/lib/alpaca';

@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 import { checkSafetyGates, verifyCronSecret } from '@/lib/safety';
 import { getIndicators } from '@/lib/indicators';
