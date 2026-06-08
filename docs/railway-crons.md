@@ -4,11 +4,11 @@ Railway cron schedules are UTC. The original plan is in America/New_York, so use
 
 | Service | Schedule | Start command |
 | --- | --- | --- |
-| `pre-market-fetch` | `30 10 * * 1-5` | `npm run cron:pre-market-fetch` |
-| `market-open` | `30 13 * * 1-5` | `npm run cron:market-open` |
-| `position-monitor` | `*/30 13-20 * * 1-5` | `npm run cron:position-monitor` |
-| `market-close` | `0 20 * * 1-5` | `npm run cron:eod` |
-| `outcome-writer` | `15 20 * * 1-5` | `npm run cron:outcome-writer` |
+| `pre-market-fetch` | `30 10 * * 1-5` | `curl -sS --fail-with-body -H 'Authorization: Bearer $CRON_SECRET' https://quant-agent-production.up.railway.app/api/cron/pre-market-fetch` |
+| `market-open` | `30 13 * * 1-5` | `curl -sS --fail-with-body -H 'Authorization: Bearer $CRON_SECRET' https://quant-agent-production.up.railway.app/api/cron/market-open` |
+| `position-monitor` | `*/30 13-20 * * 1-5` | `curl -sS --fail-with-body -H 'Authorization: Bearer $CRON_SECRET' https://quant-agent-production.up.railway.app/api/cron/position-monitor` |
+| `market-close` | `0 20 * * 1-5` | `curl -sS --fail-with-body -H 'Authorization: Bearer $CRON_SECRET' https://quant-agent-production.up.railway.app/api/cron/eod` |
+| `outcome-writer` | `15 20 * * 1-5` | `curl -sS --fail-with-body -H 'Authorization: Bearer $CRON_SECRET' https://quant-agent-production.up.railway.app/api/cron/outcome-writer` |
 
 Required variables:
 
