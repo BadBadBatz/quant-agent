@@ -1,9 +1,9 @@
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { verifyCronSecret } from '@/lib/safety';
+import { checkSafetyGates, isMarketHours, verifyCronSecret } from '@/lib/safety';
 import { getPositions, sellPosition, getLatestQuote } from '@/lib/alpaca';
-import { getAgentConfig, logDecisionNew, logOutcome, getDecisionHistory } from '@/lib/supabase';
+import { getAgentConfig, logOutcome, getDecisionHistory } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -31,92 +31,115 @@ export async function GET(request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const cfg = await getAgentConfig();
-  const stopLoss   = parseFloat(cfg.stop_loss_pct);
-  const takeProfit = parseFloat(cfg.take_profit_pct);
-
-  const positions = await getPositions();
-  if (!positions.length) return NextResponse.json({ ok: true, checked: 0 });
-
-  const results = { stops: [], profits: [], flagged: [], ok: [] };
-
-  for (const pos of positions) {
-    const ticker      = pos.symbol;
-    const entryPrice  = parseFloat(pos.avg_entry_price);
-    const quote = await getLatestQuote(ticker).catch(() => null);
-    const quotePrice = Number(quote?.AskPrice || quote?.ap || quote?.BidPrice || quote?.bp);
-    const currentPrice = quotePrice > 0 ? quotePrice : parseFloat(pos.current_price);
-    const returnPct   = (currentPrice / entryPrice) - 1;
-
-    // Hard exits — no Claude, immediate action
-    if (returnPct <= -stopLoss) {
-      try {
-        await sellPosition(ticker, pos.qty);
-        const history = await getDecisionHistory(ticker, { limit: 1 });
-        const decisionId = history[0]?.id || null;
-
-        if (decisionId) {
-          await logOutcome({
-            decision_id: decisionId,
-            exit_price:  currentPrice,
-            return_pct:  returnPct * 100,
-            exit_reason: 'stop_loss',
-            days_held:   Math.floor((Date.now() - new Date(history[0].date)) / 86400000),
-            win:         false,
-          });
-          const { supabase } = await import('@/lib/supabase');
-          await supabase.from('decisions').update({ outcome_resolved: true }).eq('id', decisionId);
-        }
-
-        results.stops.push({ ticker, returnPct: parseFloat((returnPct * 100).toFixed(2)) });
-      } catch (e) {
-        console.error(`[position-monitor] stop loss error ${ticker}:`, e.message);
-      }
-      continue;
-    }
-
-    if (returnPct >= takeProfit) {
-      try {
-        await sellPosition(ticker, pos.qty);
-        const history = await getDecisionHistory(ticker, { limit: 1 });
-        const decisionId = history[0]?.id || null;
-
-        if (decisionId) {
-          await logOutcome({
-            decision_id: decisionId,
-            exit_price:  currentPrice,
-            return_pct:  returnPct * 100,
-            exit_reason: 'take_profit',
-            days_held:   Math.floor((Date.now() - new Date(history[0].date)) / 86400000),
-            win:         true,
-          });
-          const { supabase } = await import('@/lib/supabase');
-          await supabase.from('decisions').update({ outcome_resolved: true }).eq('id', decisionId);
-        }
-
-        results.profits.push({ ticker, returnPct: parseFloat((returnPct * 100).toFixed(2)) });
-      } catch (e) {
-        console.error(`[position-monitor] take profit error ${ticker}:`, e.message);
-      }
-      continue;
-    }
-
-    // No price trigger — check for breaking news
-    const headlines = await getTickerNews(ticker);
-    if (headlines.length && isNegativeNews(headlines)) {
-      // Flag for market-open to review — don't sell here
-      const { supabase } = await import('@/lib/supabase');
-      const history = await getDecisionHistory(ticker, { limit: 1 });
-      if (history[0]) {
-        await supabase.from('decisions')
-          .update({ needs_review: true })
-          .eq('id', history[0].id);
-      }
-      results.flagged.push({ ticker, headlines });
-    } else {
-      results.ok.push(ticker);
-    }
+  if (!isMarketHours()) {
+    return NextResponse.json({ ok: true, skipped: true, reason: 'Outside market hours' });
   }
 
-  return NextResponse.json(results);
+  const safety = await checkSafetyGates();
+  if (safety.blocked) {
+    return NextResponse.json({ ok: true, skipped: true, reason: safety.reason });
+  }
+
+  try {
+    const cfg = await getAgentConfig();
+    const stopLoss = parseFloat(cfg.stop_loss_pct);
+    const takeProfit = parseFloat(cfg.take_profit_pct);
+
+    if (!Number.isFinite(stopLoss) || !Number.isFinite(takeProfit)) {
+      throw new Error('Missing stop_loss_pct or take_profit_pct in agent_config');
+    }
+
+    const positions = await getPositions();
+    if (!positions.length) return NextResponse.json({ ok: true, checked: 0 });
+
+    const results = { stops: [], profits: [], flagged: [], ok: [] };
+
+    for (const pos of positions) {
+      const ticker = pos.symbol;
+      const entryPrice = parseFloat(pos.avg_entry_price);
+      const quote = await getLatestQuote(ticker).catch(() => null);
+      const quotePrice = Number(quote?.AskPrice || quote?.ap || quote?.BidPrice || quote?.bp);
+      const currentPrice = quotePrice > 0 ? quotePrice : parseFloat(pos.current_price);
+      const returnPct = (currentPrice / entryPrice) - 1;
+
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+        results.flagged.push({ ticker, reason: 'invalid price data' });
+        continue;
+      }
+
+      // Hard exits — no Claude, immediate action
+      if (returnPct <= -stopLoss) {
+        try {
+          await sellPosition(ticker, pos.qty);
+          const history = await getDecisionHistory(ticker, { limit: 1 });
+          const decisionId = history[0]?.id || null;
+
+          if (decisionId) {
+            await logOutcome({
+              decision_id: decisionId,
+              exit_price: currentPrice,
+              return_pct: returnPct * 100,
+              exit_reason: 'stop_loss',
+              days_held: Math.floor((Date.now() - new Date(history[0].date)) / 86400000),
+              win: false,
+            });
+            const { supabase } = await import('@/lib/supabase');
+            await supabase.from('decisions').update({ outcome_resolved: true }).eq('id', decisionId);
+          }
+
+          results.stops.push({ ticker, returnPct: parseFloat((returnPct * 100).toFixed(2)) });
+        } catch (e) {
+          console.error(`[position-monitor] stop loss error ${ticker}:`, e.message);
+        }
+        continue;
+      }
+
+      if (returnPct >= takeProfit) {
+        try {
+          await sellPosition(ticker, pos.qty);
+          const history = await getDecisionHistory(ticker, { limit: 1 });
+          const decisionId = history[0]?.id || null;
+
+          if (decisionId) {
+            await logOutcome({
+              decision_id: decisionId,
+              exit_price: currentPrice,
+              return_pct: returnPct * 100,
+              exit_reason: 'take_profit',
+              days_held: Math.floor((Date.now() - new Date(history[0].date)) / 86400000),
+              win: true,
+            });
+            const { supabase } = await import('@/lib/supabase');
+            await supabase.from('decisions').update({ outcome_resolved: true }).eq('id', decisionId);
+          }
+
+          results.profits.push({ ticker, returnPct: parseFloat((returnPct * 100).toFixed(2)) });
+        } catch (e) {
+          console.error(`[position-monitor] take profit error ${ticker}:`, e.message);
+        }
+        continue;
+      }
+
+      // No price trigger — check for breaking news
+      const headlines = await getTickerNews(ticker);
+      if (headlines.length && isNegativeNews(headlines)) {
+        // Flag for market-open to review — don't sell here
+        const { supabase } = await import('@/lib/supabase');
+        const history = await getDecisionHistory(ticker, { limit: 1 });
+        if (history[0]) {
+          await supabase.from('decisions')
+            .update({ needs_review: true })
+            .eq('id', history[0].id);
+        }
+        results.flagged.push({ ticker, headlines });
+      } else {
+        results.ok.push(ticker);
+      }
+    }
+
+    return NextResponse.json({ ok: true, checked: positions.length, ...results });
+  } catch (err) {
+    console.error('[position-monitor] fatal:', err);
+    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+  }
 }
